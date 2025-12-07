@@ -165,13 +165,13 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Field names and their properties
+    # Field names and their properties - all using diverging blue-white-red colormap
     field_configs = {
-        'U': {'name': 'Velocity Magnitude', 'cmap': 'plasma', 'unit': 'm/s'},
+        'U': {'name': 'Velocity Magnitude', 'cmap': 'RdBu_r', 'unit': 'm/s'},
         'p': {'name': 'Pressure', 'cmap': 'RdBu_r', 'unit': 'm²/s²'},
-        'k': {'name': 'Turbulent Kinetic Energy', 'cmap': 'viridis', 'unit': 'm²/s²'},
-        'epsilon': {'name': 'Dissipation Rate', 'cmap': 'hot', 'unit': 'm²/s³'},
-        'nut': {'name': 'Turbulent Viscosity', 'cmap': 'coolwarm', 'unit': 'm²/s'},
+        'k': {'name': 'Turbulent Kinetic Energy', 'cmap': 'RdBu_r', 'unit': 'm²/s²'},
+        'epsilon': {'name': 'Dissipation Rate', 'cmap': 'RdBu_r', 'unit': 'm²/s³'},
+        'nut': {'name': 'Turbulent Viscosity', 'cmap': 'RdBu_r', 'unit': 'm²/s'},
     }
     
     for field_name in ['U', 'p', 'k', 'epsilon', 'nut']:
@@ -271,7 +271,7 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         # Error - bottom (percentage error, capped at 5%)
         error_levels = np.linspace(0, 5.0, 50)  # Fixed range 0-5%
         im3 = axes[2].contourf(Xi, Yi, Zi_err, levels=error_levels, vmin=0, vmax=5.0, 
-                               cmap='hot', extend='max')  # Show arrow for values > 5%
+                               cmap='RdBu_r', extend='max')  # Show arrow for values > 5%
         axes[2].set_title(f'Percentage Error: |Predicted - Reference| / |Reference| × 100% (capped at 5%)', 
                          fontsize=14, fontweight='bold')
         axes[2].set_xlabel('X [m]', fontsize=12)
