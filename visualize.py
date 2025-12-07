@@ -191,8 +191,8 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         
         config = field_configs[field_name]
         
-        # Create comparison figure
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        # Create comparison figure - stacked vertically
+        fig, axes = plt.subplots(3, 1, figsize=(10, 18))
         
         # Use griddata with Delaunay domain masking (from sample project)
         x = cell_centers[:, 0]
@@ -228,29 +228,45 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         except:
             pass  # If Delaunay fails, continue without masking
         
-        # Predicted field
-        im1 = axes[0].contourf(Xi, Yi, Zi_pred, levels=20, cmap=config['cmap'], extend='both')
-        axes[0].set_title(f'Predicted {config["name"]}', fontsize=12, fontweight='bold')
-        axes[0].set_xlabel('X [m]')
-        axes[0].set_ylabel('Y [m]')
+        # Common scale for predicted and reference
+        vmin = min(np.nanmin(Zi_pred), np.nanmin(Zi_ref))
+        vmax = max(np.nanmax(Zi_pred), np.nanmax(Zi_ref))
+        levels = np.linspace(vmin, vmax, 20)
+        
+        # Predicted field - top
+        im1 = axes[0].contourf(Xi, Yi, Zi_pred, levels=levels, vmin=vmin, vmax=vmax, 
+                               cmap=config['cmap'], extend='neither')
+        axes[0].set_title(f'Predicted {config["name"]}', fontsize=14, fontweight='bold')
+        axes[0].set_xlabel('X [m]', fontsize=12)
+        axes[0].set_ylabel('Y [m]', fontsize=12)
         axes[0].set_aspect('equal')
-        plt.colorbar(im1, ax=axes[0], label=config['unit'])
+        axes[0].grid(True, alpha=0.3)
+        # Colorbar without extend arrows (no pointy legends)
+        cbar1 = plt.colorbar(im1, ax=axes[0], label=config['unit'], fraction=0.046, pad=0.04)
+        cbar1.ax.tick_params(labelsize=10)
         
-        # Reference
-        im2 = axes[1].contourf(Xi, Yi, Zi_ref, levels=20, cmap=config['cmap'], extend='both')
-        axes[1].set_title(f'Reference {config["name"]}', fontsize=12, fontweight='bold')
-        axes[1].set_xlabel('X [m]')
-        axes[1].set_ylabel('Y [m]')
+        # Reference - middle
+        im2 = axes[1].contourf(Xi, Yi, Zi_ref, levels=levels, vmin=vmin, vmax=vmax, 
+                               cmap=config['cmap'], extend='neither')
+        axes[1].set_title(f'Reference {config["name"]}', fontsize=14, fontweight='bold')
+        axes[1].set_xlabel('X [m]', fontsize=12)
+        axes[1].set_ylabel('Y [m]', fontsize=12)
         axes[1].set_aspect('equal')
-        plt.colorbar(im2, ax=axes[1], label=config['unit'])
+        axes[1].grid(True, alpha=0.3)
+        # Colorbar without extend arrows
+        cbar2 = plt.colorbar(im2, ax=axes[1], label=config['unit'], fraction=0.046, pad=0.04)
+        cbar2.ax.tick_params(labelsize=10)
         
-        # Error
-        im3 = axes[2].contourf(Xi, Yi, Zi_err, levels=20, cmap='hot', extend='both')
-        axes[2].set_title(f'Absolute Error', fontsize=12, fontweight='bold')
-        axes[2].set_xlabel('X [m]')
-        axes[2].set_ylabel('Y [m]')
+        # Error - bottom
+        im3 = axes[2].contourf(Xi, Yi, Zi_err, levels=20, cmap='hot', extend='neither')
+        axes[2].set_title(f'Absolute Error', fontsize=14, fontweight='bold')
+        axes[2].set_xlabel('X [m]', fontsize=12)
+        axes[2].set_ylabel('Y [m]', fontsize=12)
         axes[2].set_aspect('equal')
-        plt.colorbar(im3, ax=axes[2], label=config['unit'])
+        axes[2].grid(True, alpha=0.3)
+        # Colorbar without extend arrows
+        cbar3 = plt.colorbar(im3, ax=axes[2], label=config['unit'], fraction=0.046, pad=0.04)
+        cbar3.ax.tick_params(labelsize=10)
         
         plt.tight_layout()
         output_path = output_dir / f'{field_name}_comparison.png'
