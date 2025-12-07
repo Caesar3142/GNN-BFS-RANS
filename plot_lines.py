@@ -185,28 +185,30 @@ def plot_line_comparison(predicted_fields, reference_fields, cell_centers,
     pred_pos_p, pred_p_line = extract_line_data(cell_centers, pred_p, x_line=x_line, y_line=y_line, tol=tol)
     ref_pos_p, ref_p_line = extract_line_data(cell_centers, ref_p, x_line=x_line, y_line=y_line, tol=tol)
     
-    # Create figure with two subplots
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    # Create figure with two subplots - larger figure size
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7))
     
     # Plot velocity
     ax1 = axes[0]
-    ax1.plot(pred_pos_U, pred_U_line, 'b-', label='Predicted', linewidth=2, marker='o', markersize=4)
-    ax1.plot(ref_pos_U, ref_U_line, 'r--', label='Reference', linewidth=2, marker='s', markersize=4)
-    ax1.set_xlabel(position_label, fontsize=12)
-    ax1.set_ylabel('Velocity Magnitude [m/s]', fontsize=12)
-    ax1.set_title(f'Velocity along {line_label}', fontsize=14, fontweight='bold')
-    ax1.legend(fontsize=11)
+    ax1.plot(pred_pos_U, pred_U_line, 'b-', label='Predicted', linewidth=2.5, marker='o', markersize=5)
+    ax1.plot(ref_pos_U, ref_U_line, 'r--', label='Reference', linewidth=2.5, marker='s', markersize=5)
+    ax1.set_xlabel(position_label, fontsize=14)
+    ax1.set_ylabel('Velocity Magnitude [m/s]', fontsize=14)
+    ax1.set_title(f'Velocity along {line_label}', fontsize=16, fontweight='bold')
+    ax1.legend(fontsize=9, loc='best')
     ax1.grid(True, alpha=0.3)
+    ax1.tick_params(labelsize=12)
     
     # Plot pressure
     ax2 = axes[1]
-    ax2.plot(pred_pos_p, pred_p_line, 'b-', label='Predicted', linewidth=2, marker='o', markersize=4)
-    ax2.plot(ref_pos_p, ref_p_line, 'r--', label='Reference', linewidth=2, marker='s', markersize=4)
-    ax2.set_xlabel(position_label, fontsize=12)
-    ax2.set_ylabel('Pressure [m²/s²]', fontsize=12)
-    ax2.set_title(f'Pressure along {line_label}', fontsize=14, fontweight='bold')
-    ax2.legend(fontsize=11)
+    ax2.plot(pred_pos_p, pred_p_line, 'b-', label='Predicted', linewidth=2.5, marker='o', markersize=5)
+    ax2.plot(ref_pos_p, ref_p_line, 'r--', label='Reference', linewidth=2.5, marker='s', markersize=5)
+    ax2.set_xlabel(position_label, fontsize=14)
+    ax2.set_ylabel('Pressure [m²/s²]', fontsize=14)
+    ax2.set_title(f'Pressure along {line_label}', fontsize=16, fontweight='bold')
+    ax2.legend(fontsize=9, loc='best')
     ax2.grid(True, alpha=0.3)
+    ax2.tick_params(labelsize=12)
     
     plt.tight_layout()
     

@@ -214,8 +214,8 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         
         config = field_configs[field_name]
         
-        # Create comparison figure - stacked vertically
-        fig, axes = plt.subplots(3, 1, figsize=(10, 18))
+        # Create comparison figure - stacked vertically (larger figure)
+        fig, axes = plt.subplots(3, 1, figsize=(12, 20))
         
         # Collapse to 2D by averaging values at same (x, y) coordinates
         x, y, pred_mag_2d = collapse_to_2d(cell_centers, pred_mag)
@@ -285,9 +285,10 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         axes[0].set_ylabel('Y [m]', fontsize=12)
         axes[0].set_aspect('equal')
         axes[0].grid(True, alpha=0.3)
-        # Colorbar without extend arrows (no pointy legends)
-        cbar1 = plt.colorbar(im1, ax=axes[0], label=config['unit'], fraction=0.046, pad=0.04)
-        cbar1.ax.tick_params(labelsize=10)
+        # Colorbar without extend arrows (smaller size)
+        cbar1 = plt.colorbar(im1, ax=axes[0], label=config['unit'], fraction=0.035, pad=0.02)
+        cbar1.ax.tick_params(labelsize=9)
+        cbar1.ax.yaxis.label.set_size(10)
         
         # Reference - middle (using triangulation)
         im2 = axes[1].tricontourf(tri, ref_mag_2d, levels=levels, vmin=vmin, vmax=vmax, 
@@ -297,9 +298,10 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         axes[1].set_ylabel('Y [m]', fontsize=12)
         axes[1].set_aspect('equal')
         axes[1].grid(True, alpha=0.3)
-        # Colorbar without extend arrows
-        cbar2 = plt.colorbar(im2, ax=axes[1], label=config['unit'], fraction=0.046, pad=0.04)
-        cbar2.ax.tick_params(labelsize=10)
+        # Colorbar without extend arrows (smaller size)
+        cbar2 = plt.colorbar(im2, ax=axes[1], label=config['unit'], fraction=0.035, pad=0.02)
+        cbar2.ax.tick_params(labelsize=9)
+        cbar2.ax.yaxis.label.set_size(10)
         
         # Error - bottom (normalized error, capped at 10%, using triangulation)
         error_levels = np.linspace(0, 10.0, 50)  # Fixed range 0-10%
@@ -311,9 +313,10 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         axes[2].set_ylabel('Y [m]', fontsize=12)
         axes[2].set_aspect('equal')
         axes[2].grid(True, alpha=0.3)
-        # Colorbar with percentage label, fixed range 0-10%
-        cbar3 = plt.colorbar(im3, ax=axes[2], label='Error [%]', fraction=0.046, pad=0.04)
-        cbar3.ax.tick_params(labelsize=10)
+        # Colorbar with percentage label, fixed range 0-10% (smaller size)
+        cbar3 = plt.colorbar(im3, ax=axes[2], label='Error [%]', fraction=0.035, pad=0.02)
+        cbar3.ax.tick_params(labelsize=9)
+        cbar3.ax.yaxis.label.set_size(10)
         cbar3.set_ticks(np.linspace(0, 10, 11))  # Show ticks at 0, 1, 2, ..., 10%
         
         plt.tight_layout()

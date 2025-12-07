@@ -310,6 +310,20 @@ python inference.py \
 - `--reference_time`: Optional time directory for comparison (e.g., "282")
 - `--save_format`: Output format - numpy, openfoam, or both
 
+## Theory and Methods
+
+For detailed theoretical background and methodological approaches, see **[THEORY_AND_METHODS.md](THEORY_AND_METHODS.md)**.
+
+This document covers:
+- RANS equations and turbulence modeling
+- Graph Neural Networks theory
+- Graph construction from unstructured meshes
+- Message passing mechanisms
+- GNN architectures (GCN, GAT, GIN, Transformer)
+- Training methodology and loss functions
+- Normalization strategies
+- Surrogate modeling approach
+
 ## Model Architecture
 
 The GNN model (`FlowGNN`) consists of:
