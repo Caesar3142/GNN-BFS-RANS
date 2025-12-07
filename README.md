@@ -8,8 +8,9 @@ The framework consists of:
 - **OpenFOAM Data Loader**: Parses OpenFOAM mesh and field files
 - **Graph Constructor**: Builds graph structure from mesh connectivity
 - **GNN Model**: Graph Neural Network for flow field prediction
-- **Training Script**: End-to-end training pipeline
+- **Training Script**: End-to-end training pipeline with history tracking
 - **Inference Script**: Prediction and evaluation tools
+- **Visualization Tools**: Field comparison plots and training curve visualization
 
 ## Features
 
@@ -18,8 +19,12 @@ The framework consists of:
 - Handles unstructured meshes via cell-to-cell connectivity
 - Robust graph construction with automatic validation and error handling
 - Automatic handling of isolated nodes and edge connectivity issues
+- **Improved normalization**: Per-component velocity normalization for better accuracy
+- **Field-wise loss**: Balanced training across all flow fields
+- **Training visualization**: Plot training curves and monitor progress
 - Can save predictions in both NumPy and OpenFOAM formats
 - Includes evaluation metrics for field-wise error analysis
+- Triangulation-based visualization for accurate mesh representation
 
 ## Installation
 
@@ -100,17 +105,73 @@ python visualize.py \
     --output_dir visualizations
 ```
 
+**Basic Usage:**
+```bash
+# Minimum required: just specify the checkpoint
+python visualize.py --checkpoint checkpoints/best_model.pt
+
+# Full example with all options
+python visualize.py \
+    --checkpoint checkpoints/best_model.pt \
+    --case_path OpenFOAM-data \
+    --reference_time 282 \
+    --output_dir visualizations \
+    --device cuda
+```
+
 **Arguments:**
-- `--checkpoint`: Path to trained model checkpoint
-- `--case_path`: Path to OpenFOAM case directory
-- `--reference_time`: Time directory for reference comparison (e.g., "282")
-- `--output_dir`: Directory to save visualization plots
-- `--device`: Device to use (default: 'cuda' if available, else 'cpu')
+- `--checkpoint` (required): Path to trained model checkpoint (e.g., `checkpoints/best_model.pt`)
+- `--case_path` (optional): Path to OpenFOAM case directory (default: `OpenFOAM-data`)
+- `--reference_time` (optional): Time directory for reference comparison (default: `282`)
+- `--output_dir` (optional): Directory to save visualization plots (default: `visualizations`)
+- `--device` (optional): Device to use - `cuda` or `cpu` (default: auto-detect)
+
+**What it does:**
+1. Loads the trained model from the checkpoint
+2. Loads the normalizer (if saved with the checkpoint)
+3. Constructs the graph from the mesh
+4. Runs inference to predict flow fields
+5. Loads reference fields from the specified time directory
+6. Creates comparison plots for each field
 
 **Output:**
-- Creates contour plots for each field (U, p, k, epsilon, nut)
-- Each plot shows: Predicted | Reference | Absolute Error
-- Saved as PNG images in the output directory
+- Creates comparison plots for each field: **U** (velocity), **p** (pressure), **k**, **epsilon**, **nut**
+- Each plot contains 3 subplots stacked vertically:
+  1. **Top**: Predicted field
+  2. **Middle**: Reference field (from OpenFOAM)
+  3. **Bottom**: Normalized error (|Predicted - Reference| / Range(Reference) × 100%, capped at 10%)
+- All plots saved as PNG images in the output directory:
+  - `U_comparison.png`
+  - `p_comparison.png`
+  - `k_comparison.png`
+  - `epsilon_comparison.png`
+  - `nut_comparison.png`
+
+**Example Output:**
+```
+Loading model...
+Normalizer found - will denormalize predictions
+Loading mesh and constructing graph...
+Running prediction...
+Loading reference fields...
+Filtering to z >= 0 (positive z side): 12345 cells (from 24690 total)
+Creating visualization plots...
+  U Error Stats:
+    Mean absolute error: 1.234567e-03
+    Max absolute error: 5.678901e-03
+    Reference scale (range): 1.000000e+00 (min: 0.000000e+00, max: 1.000000e+00)
+    Mean normalized error: 0.12%
+    Max normalized error: 0.57%
+  Saved comparison plot: visualizations/U_comparison.png
+  ...
+Visualization complete! Plots saved to visualizations
+```
+
+**Tips:**
+- Make sure you have a trained model checkpoint before visualizing
+- The reference time should match a time directory in your OpenFOAM case
+- The visualization automatically filters to 2D (z >= 0) for 2D plots
+- Error statistics are printed to console for each field
 
 ### Training
 
@@ -139,6 +200,42 @@ python train.py \
 - `--epochs`: Number of training epochs (default: 100)
 - `--lr`: Learning rate (default: 0.001)
 - `--batch_size`: Batch size (default: 1, typically for single mesh)
+
+**Training Output:**
+- Model checkpoints saved in `output_dir/`:
+  - `best_model.pt`: Best model based on validation loss
+  - `checkpoint_epoch_N.pt`: Periodic checkpoints
+  - `config.json`: Training configuration
+  - `training_history.json`: Training history (losses, field errors, learning rate)
+
+### Plot Training Curves
+
+Visualize training progress and loss curves:
+
+```bash
+# Basic usage (plots from checkpoints/training_history.json)
+python plot_training.py
+
+# Specify custom history file
+python plot_training.py --history checkpoints/training_history.json
+
+# Also create detailed field errors plot
+python plot_training.py --detailed
+```
+
+**Output:**
+- `training_curves.png`: Main plot with 4 subplots:
+  1. Training and validation loss (log scale)
+  2. Learning rate schedule
+  3. Per-field errors (U, p, k, epsilon, nut)
+  4. Overfitting indicator (val_loss - train_loss)
+- `field_errors_detailed.png`: Detailed per-field error plots (if `--detailed` flag used)
+
+**What to look for:**
+- **Loss curves**: Should decrease over time; validation loss should track training loss
+- **Learning rate**: Shows how the scheduler adjusts the learning rate
+- **Field errors**: Individual field prediction errors (computed every 10 epochs)
+- **Overfitting indicator**: Positive values suggest overfitting; negative values suggest underfitting
 
 ### Inference
 
@@ -196,10 +293,18 @@ The graph is constructed from OpenFOAM mesh connectivity:
 
 ## Training Details
 
-- **Loss Function**: Mean Squared Error (MSE) over all predicted fields
-- **Optimizer**: Adam with learning rate scheduling
+- **Loss Function**: Weighted MSE with field-wise computation for balanced training across all fields
+  - Computes loss separately for each field (U, p, k, epsilon, nut)
+  - Applies field-specific weights, then combines
+  - Ensures balanced training regardless of normalized field scales
+- **Normalization**: Per-component normalization for velocity (Ux, Uy, Uz normalized separately)
+  - Each velocity component gets its own mean and std
+  - Scalar fields normalized independently
+  - Improves training stability and prediction accuracy
+- **Optimizer**: Adam with learning rate scheduling (ReduceLROnPlateau)
 - **Regularization**: Gradient clipping, dropout, batch normalization
-- **Evaluation**: Per-field error metrics (MAE, RMSE, relative error)
+- **Evaluation**: Per-field error metrics (MAE, RMSE, relative error) computed every 10 epochs
+- **Training History**: Automatically saved to `training_history.json` for plotting and analysis
 
 ## Output
 
@@ -208,6 +313,7 @@ The graph is constructed from OpenFOAM mesh connectivity:
   - `best_model.pt`: Best model based on validation loss
   - `checkpoint_epoch_N.pt`: Periodic checkpoints
   - `config.json`: Training configuration
+  - `training_history.json`: Training history (losses, field errors, learning rate)
 
 ### Inference Output
 - Predictions saved as:
@@ -215,23 +321,43 @@ The graph is constructed from OpenFOAM mesh connectivity:
   - `predictions/predicted/`: OpenFOAM format field files (if `save_format` includes 'openfoam')
 - Field comparison metrics printed to console (if reference provided)
 
-### Visualization
-- Contour plots comparing predicted vs reference fields
-- Error maps showing absolute differences
-- Saved as PNG images in the visualization directory
+### Visualization Output
+- **Field comparison plots**: Contour plots comparing predicted vs reference fields
+  - Saved as PNG images: `U_comparison.png`, `p_comparison.png`, etc.
+  - Each plot shows predicted, reference, and normalized error
+- **Training curves**: Training and validation loss plots
+  - `training_curves.png`: Main training progress plot
+  - `field_errors_detailed.png`: Detailed per-field error plots (optional)
 
 ## Example Workflow
 
 1. **Prepare Data**: Ensure your OpenFOAM case data is in the correct structure
-2. **Train Model**:
+2. **Test Data Loading** (optional but recommended):
+   ```bash
+   python test_data_loading.py --case_path OpenFOAM-data
+   ```
+3. **Train Model**:
    ```bash
    python train.py --case_path OpenFOAM-data --time_dirs 0 100 200 282 --epochs 100
    ```
-3. **Evaluate Model**:
+   This will:
+   - Load and normalize the data
+   - Train the GNN model
+   - Save checkpoints and training history
+4. **Plot Training Curves**:
+   ```bash
+   python plot_training.py --history checkpoints/training_history.json --detailed
+   ```
+   This creates plots showing:
+   - Training and validation loss curves
+   - Learning rate schedule
+   - Per-field errors over time
+   - Overfitting indicator
+5. **Evaluate Model**:
    ```bash
    python inference.py --checkpoint checkpoints/best_model.pt --reference_time 282
    ```
-4. **Visualize Results**:
+6. **Visualize Results**:
    ```bash
    python visualize.py --checkpoint checkpoints/best_model.pt --reference_time 282 --output_dir visualizations
    ```
@@ -241,7 +367,7 @@ The graph is constructed from OpenFOAM mesh connectivity:
    - Turbulent kinetic energy (k)
    - Dissipation rate (epsilon)
    - Turbulent viscosity (nut)
-5. **Use Predictions**: Load predictions from `predictions/` directory for further analysis
+7. **Use Predictions**: Load predictions from `predictions/` directory for further analysis
 
 ## Notes
 
@@ -251,6 +377,9 @@ The graph is constructed from OpenFOAM mesh connectivity:
 - For best results, use converged solution data (e.g., final time step) for training
 - Graph connectivity is automatically validated and fixed during construction
 - Isolated nodes are handled automatically with self-loops to ensure message passing works correctly
+- **Normalization**: Velocity components are normalized separately; each field is normalized independently
+- **Training**: The loss function uses field-wise computation to ensure balanced learning across all fields
+- **Visualization**: Plots use triangulation-based rendering for accurate representation of unstructured meshes
 
 ## Troubleshooting
 
@@ -267,11 +396,24 @@ If you encounter errors related to graph connectivity or message passing:
 
 ## Recent Improvements
 
+### Graph Connectivity & Message Passing
 - ✅ Fixed graph connectivity issues with proper edge index remapping
 - ✅ Added automatic validation of edge indices and node connectivity
 - ✅ Implemented robust message passing with error handling
 - ✅ Automatic handling of isolated nodes with self-loops
 - ✅ Enhanced error messages for debugging connectivity issues
+
+### Normalization & Training
+- ✅ **Per-component velocity normalization**: Ux, Uy, Uz normalized separately for better accuracy
+- ✅ **Field-wise loss computation**: Improved loss function that computes loss per field, ensuring balanced training
+- ✅ **Training history tracking**: Automatic saving of training metrics for analysis
+- ✅ **Training curve plotting**: New script to visualize training progress and loss curves
+
+### Visualization
+- ✅ **Triangulation-based plotting**: Direct use of mesh structure for more accurate visualizations
+- ✅ **2D collapse function**: Automatic averaging of 3D data to 2D for cleaner plots
+- ✅ **Improved error metrics**: Normalized error calculation using field range instead of individual values
+- ✅ **Diagnostic output**: Detailed error statistics printed during visualization
 
 ## Future Enhancements
 

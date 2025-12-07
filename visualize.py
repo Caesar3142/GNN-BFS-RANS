@@ -10,6 +10,7 @@ from matplotlib.colors import TwoSlopeNorm
 from pathlib import Path
 import argparse
 import json
+from collections import defaultdict
 
 from openfoam_loader import OpenFOAMLoader
 from graph_constructor import GraphConstructor
@@ -160,6 +161,28 @@ def create_2d_contour_plot(cell_centers, field_values, field_name, title,
     return fig, ax
 
 
+def collapse_to_2d(cell_centers, field, tol=1e-6):
+    """
+    Collapse extruded 3D cell-centered data into true 2D data
+    by clustering points in (x,y) with tolerance.
+    """
+    bins = {}
+    
+    for (x, y, z), val in zip(cell_centers, field):
+        key = (round(x / tol), round(y / tol))
+        if key not in bins:
+            bins[key] = {'x': [], 'y': [], 'val': []}
+        bins[key]['x'].append(x)
+        bins[key]['y'].append(y)
+        bins[key]['val'].append(val)
+    
+    x2d = np.array([np.mean(v['x']) for v in bins.values()])
+    y2d = np.array([np.mean(v['y']) for v in bins.values()])
+    v2d = np.array([np.mean(v['val']) for v in bins.values()])
+    
+    return x2d, y2d, v2d
+
+
 def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir):
     """Create comparison plots for predicted vs reference fields."""
     output_dir = Path(output_dir)
@@ -194,28 +217,27 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         # Create comparison figure - stacked vertically
         fig, axes = plt.subplots(3, 1, figsize=(10, 18))
         
-        # Use griddata with Delaunay domain masking (from sample project)
-        x = cell_centers[:, 0]
-        y = cell_centers[:, 1]
+        # Collapse to 2D by averaging values at same (x, y) coordinates
+        x, y, pred_mag_2d = collapse_to_2d(cell_centers, pred_mag)
+        _, _, ref_mag_2d = collapse_to_2d(cell_centers, ref_mag)
         
-        # Create regular grid - higher resolution
-        nx, ny = 500, 500
-        xi = np.linspace(x.min(), x.max(), nx)
-        yi = np.linspace(y.min(), y.max(), ny)
-        Xi, Yi = np.meshgrid(xi, yi)
+        from matplotlib.tri import Triangulation
         
-        from scipy.interpolate import griddata
-        from scipy.spatial import Delaunay
-        
-        # Interpolate to grid
-        Zi_pred = griddata((x, y), pred_mag, (Xi, Yi), method='linear', fill_value=np.nan)
-        Zi_ref = griddata((x, y), ref_mag, (Xi, Yi), method='linear', fill_value=np.nan)
+        # Create Delaunay triangulation from collapsed 2D cell centers
+        try:
+            tri = Triangulation(x, y)
+        except:
+            # Fallback: create triangulation manually if automatic fails
+            from scipy.spatial import Delaunay
+            points_2d = np.column_stack([x, y])
+            delaunay_tri = Delaunay(points_2d)
+            tri = Triangulation(x, y, delaunay_tri.simplices)
         
         # Calculate normalized error: |pred - ref| / range(ref) * 100
         # This normalizes by the range (max - min) of the reference field
         # This provides a consistent scale and avoids high percentage errors for small individual values
-        ref_max = np.nanmax(ref_mag)
-        ref_min = np.nanmin(ref_mag)
+        ref_max = np.nanmax(ref_mag_2d)
+        ref_min = np.nanmin(ref_mag_2d)
         ref_range = ref_max - ref_min
         
         # If range is very small, use max absolute value as fallback
@@ -229,17 +251,16 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         
         if ref_scale > eps:
             # Normalize by the scale of the reference field
-            error_normalized = (np.abs(pred_mag - ref_mag) / (ref_scale + eps)) * 100
+            error_normalized = (np.abs(pred_mag_2d - ref_mag_2d) / (ref_scale + eps)) * 100
         else:
             # Fallback: use absolute error if reference is essentially zero everywhere
-            error_normalized = np.abs(pred_mag - ref_mag) * 100
+            error_normalized = np.abs(pred_mag_2d - ref_mag_2d) * 100
         
         # Clip error to maximum 10% for better visualization
         error_normalized = np.clip(error_normalized, 0, 10.0)
-        Zi_err = griddata((x, y), error_normalized, (Xi, Yi), method='linear', fill_value=np.nan)
         
         # Print diagnostic information
-        abs_error = np.abs(pred_mag - ref_mag)
+        abs_error = np.abs(pred_mag_2d - ref_mag_2d)
         mean_abs_error = np.mean(abs_error)
         max_abs_error = np.max(abs_error)
         mean_error_pct = np.mean(error_normalized)
@@ -251,29 +272,14 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         print(f"    Mean normalized error: {mean_error_pct:.2f}%")
         print(f"    Max normalized error: {max_error_pct:.2f}%")
         
-        # Domain masking with Delaunay triangulation (key fix from sample project)
-        try:
-            points_2d = np.column_stack([x, y])
-            tri = Delaunay(points_2d)
-            grid_points = np.column_stack([Xi.ravel(), Yi.ravel()])
-            mask = tri.find_simplex(grid_points) >= 0
-            mask = mask.reshape(Xi.shape)
-            
-            # Mask points outside domain
-            Zi_pred[~mask] = np.nan
-            Zi_ref[~mask] = np.nan
-            Zi_err[~mask] = np.nan
-        except:
-            pass  # If Delaunay fails, continue without masking
-        
         # Common scale for predicted and reference
-        vmin = min(np.nanmin(Zi_pred), np.nanmin(Zi_ref))
-        vmax = max(np.nanmax(Zi_pred), np.nanmax(Zi_ref))
+        vmin = min(np.nanmin(pred_mag_2d), np.nanmin(ref_mag_2d))
+        vmax = max(np.nanmax(pred_mag_2d), np.nanmax(ref_mag_2d))
         levels = np.linspace(vmin, vmax, 50)  # More contour levels for smoother appearance
         
-        # Predicted field - top
-        im1 = axes[0].contourf(Xi, Yi, Zi_pred, levels=levels, vmin=vmin, vmax=vmax, 
-                               cmap=config['cmap'], extend='neither')
+        # Predicted field - top (using triangulation)
+        im1 = axes[0].tricontourf(tri, pred_mag_2d, levels=levels, vmin=vmin, vmax=vmax, 
+                                  cmap=config['cmap'], extend='neither')
         axes[0].set_title(f'Predicted {config["name"]}', fontsize=14, fontweight='bold')
         axes[0].set_xlabel('X [m]', fontsize=12)
         axes[0].set_ylabel('Y [m]', fontsize=12)
@@ -283,9 +289,9 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         cbar1 = plt.colorbar(im1, ax=axes[0], label=config['unit'], fraction=0.046, pad=0.04)
         cbar1.ax.tick_params(labelsize=10)
         
-        # Reference - middle
-        im2 = axes[1].contourf(Xi, Yi, Zi_ref, levels=levels, vmin=vmin, vmax=vmax, 
-                               cmap=config['cmap'], extend='neither')
+        # Reference - middle (using triangulation)
+        im2 = axes[1].tricontourf(tri, ref_mag_2d, levels=levels, vmin=vmin, vmax=vmax, 
+                                  cmap=config['cmap'], extend='neither')
         axes[1].set_title(f'Reference {config["name"]}', fontsize=14, fontweight='bold')
         axes[1].set_xlabel('X [m]', fontsize=12)
         axes[1].set_ylabel('Y [m]', fontsize=12)
@@ -295,10 +301,10 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         cbar2 = plt.colorbar(im2, ax=axes[1], label=config['unit'], fraction=0.046, pad=0.04)
         cbar2.ax.tick_params(labelsize=10)
         
-        # Error - bottom (normalized error, capped at 10%)
+        # Error - bottom (normalized error, capped at 10%, using triangulation)
         error_levels = np.linspace(0, 10.0, 50)  # Fixed range 0-10%
-        im3 = axes[2].contourf(Xi, Yi, Zi_err, levels=error_levels, vmin=0, vmax=10.0, 
-                               cmap='RdBu_r', extend='neither')  # No extend arrows
+        im3 = axes[2].tricontourf(tri, error_normalized, levels=error_levels, vmin=0, vmax=10.0, 
+                                  cmap='RdBu_r', extend='neither')  # No extend arrows
         axes[2].set_title(f'Normalized Error: |Predicted - Reference| / Range(Reference) × 100% (capped at 10%)', 
                          fontsize=14, fontweight='bold')
         axes[2].set_xlabel('X [m]', fontsize=12)

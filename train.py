@@ -332,14 +332,17 @@ def main():
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Loss and optimizer
-    # Use weighted loss to account for different field magnitudes
-    criterion = WeightedMSELoss(field_weights={
-        'U': 1.0,      # Velocity - most important
-        'p': 1.0,      # Pressure - important
-        'k': 0.5,      # Turbulence fields - less critical
-        'epsilon': 0.5,
-        'nut': 0.5
-    })
+    # Use weighted loss with field-wise computation for better handling of normalized fields
+    criterion = WeightedMSELoss(
+        field_weights={
+            'U': 1.0,      # Velocity - most important
+            'p': 1.0,      # Pressure - important
+            'k': 0.5,      # Turbulence fields - less critical
+            'epsilon': 0.5,
+            'nut': 0.5
+        },
+        use_fieldwise=True  # Use field-wise loss computation (better for normalized fields)
+    )
     
     optimizer = optim.Adam(
         model.parameters(),
@@ -353,6 +356,15 @@ def main():
     # Training loop
     print("Starting training...")
     best_val_loss = float('inf')
+    
+    # Training history for plotting
+    training_history = {
+        'epoch': [],
+        'train_loss': [],
+        'val_loss': [],
+        'field_errors': {field: [] for field in ['U', 'p', 'k', 'epsilon', 'nut']},
+        'learning_rate': []
+    }
     
     for epoch in range(1, args.epochs + 1):
         # Train
@@ -370,8 +382,24 @@ def main():
             print(f"\nEpoch {epoch} - Field Errors:")
             for field, error in field_errors.items():
                 print(f"  {field}: {error:.6f}")
+        else:
+            field_errors = {}
         
-        print(f"Epoch {epoch}: Train Loss = {train_loss:.6f}, Val Loss = {val_loss:.6f}")
+        # Get current learning rate
+        current_lr = optimizer.param_groups[0]['lr']
+        
+        # Store training history
+        training_history['epoch'].append(epoch)
+        training_history['train_loss'].append(train_loss)
+        training_history['val_loss'].append(val_loss)
+        training_history['learning_rate'].append(current_lr)
+        for field in ['U', 'p', 'k', 'epsilon', 'nut']:
+            if field in field_errors:
+                training_history['field_errors'][field].append(field_errors[field])
+            else:
+                training_history['field_errors'][field].append(None)
+        
+        print(f"Epoch {epoch}: Train Loss = {train_loss:.6f}, Val Loss = {val_loss:.6f}, LR = {current_lr:.6e}")
         
         # Save checkpoint
         if val_loss < best_val_loss:
@@ -403,6 +431,21 @@ def main():
             }, os.path.join(args.output_dir, f'checkpoint_epoch_{epoch}.pt'))
     
     print("Training completed!")
+    
+    # Save training history
+    history_path = os.path.join(args.output_dir, 'training_history.json')
+    # Convert to JSON-serializable format
+    history_json = {
+        'epoch': training_history['epoch'],
+        'train_loss': training_history['train_loss'],
+        'val_loss': training_history['val_loss'],
+        'learning_rate': training_history['learning_rate'],
+        'field_errors': {field: [e if e is not None else None for e in errors] 
+                        for field, errors in training_history['field_errors'].items()}
+    }
+    with open(history_path, 'w') as f:
+        json.dump(history_json, f, indent=2)
+    print(f"Training history saved to {history_path}")
 
 
 if __name__ == '__main__':
