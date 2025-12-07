@@ -211,18 +211,45 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         Zi_pred = griddata((x, y), pred_mag, (Xi, Yi), method='linear', fill_value=np.nan)
         Zi_ref = griddata((x, y), ref_mag, (Xi, Yi), method='linear', fill_value=np.nan)
         
-        # Calculate percentage error: (|pred - ref| / |ref|) * 100
-        # Avoid division by zero
-        ref_magnitude = np.abs(ref_mag)
-        threshold = np.max(ref_magnitude) * 1e-6  # Small threshold to avoid division by zero
-        error_percent = np.where(
-            ref_magnitude > threshold,
-            (np.abs(pred_mag - ref_mag) / ref_magnitude) * 100,
-            np.zeros_like(ref_mag)
-        )
-        # Clip error to maximum 5% for better visualization
-        error_percent = np.clip(error_percent, 0, 5.0)
-        Zi_err = griddata((x, y), error_percent, (Xi, Yi), method='linear', fill_value=np.nan)
+        # Calculate normalized error: |pred - ref| / range(ref) * 100
+        # This normalizes by the range (max - min) of the reference field
+        # This provides a consistent scale and avoids high percentage errors for small individual values
+        ref_max = np.nanmax(ref_mag)
+        ref_min = np.nanmin(ref_mag)
+        ref_range = ref_max - ref_min
+        
+        # If range is very small, use max absolute value as fallback
+        if ref_range < 1e-10:
+            ref_scale = max(np.abs(ref_max), np.abs(ref_min))
+        else:
+            ref_scale = ref_range
+        
+        # Add small epsilon to avoid division by zero
+        eps = max(ref_scale * 1e-6, 1e-10)
+        
+        if ref_scale > eps:
+            # Normalize by the scale of the reference field
+            error_normalized = (np.abs(pred_mag - ref_mag) / (ref_scale + eps)) * 100
+        else:
+            # Fallback: use absolute error if reference is essentially zero everywhere
+            error_normalized = np.abs(pred_mag - ref_mag) * 100
+        
+        # Clip error to maximum 10% for better visualization
+        error_normalized = np.clip(error_normalized, 0, 10.0)
+        Zi_err = griddata((x, y), error_normalized, (Xi, Yi), method='linear', fill_value=np.nan)
+        
+        # Print diagnostic information
+        abs_error = np.abs(pred_mag - ref_mag)
+        mean_abs_error = np.mean(abs_error)
+        max_abs_error = np.max(abs_error)
+        mean_error_pct = np.mean(error_normalized)
+        max_error_pct = np.max(error_normalized)
+        print(f"  {field_name} Error Stats:")
+        print(f"    Mean absolute error: {mean_abs_error:.6e}")
+        print(f"    Max absolute error: {max_abs_error:.6e}")
+        print(f"    Reference scale (range): {ref_scale:.6e} (min: {ref_min:.6e}, max: {ref_max:.6e})")
+        print(f"    Mean normalized error: {mean_error_pct:.2f}%")
+        print(f"    Max normalized error: {max_error_pct:.2f}%")
         
         # Domain masking with Delaunay triangulation (key fix from sample project)
         try:
@@ -268,20 +295,20 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         cbar2 = plt.colorbar(im2, ax=axes[1], label=config['unit'], fraction=0.046, pad=0.04)
         cbar2.ax.tick_params(labelsize=10)
         
-        # Error - bottom (percentage error, capped at 5%)
-        error_levels = np.linspace(0, 5.0, 50)  # Fixed range 0-5%
-        im3 = axes[2].contourf(Xi, Yi, Zi_err, levels=error_levels, vmin=0, vmax=5.0, 
-                               cmap='RdBu_r', extend='max')  # Show arrow for values > 5%
-        axes[2].set_title(f'Percentage Error: |Predicted - Reference| / |Reference| × 100% (capped at 5%)', 
+        # Error - bottom (normalized error, capped at 10%)
+        error_levels = np.linspace(0, 10.0, 50)  # Fixed range 0-10%
+        im3 = axes[2].contourf(Xi, Yi, Zi_err, levels=error_levels, vmin=0, vmax=10.0, 
+                               cmap='RdBu_r', extend='neither')  # No extend arrows
+        axes[2].set_title(f'Normalized Error: |Predicted - Reference| / Range(Reference) × 100% (capped at 10%)', 
                          fontsize=14, fontweight='bold')
         axes[2].set_xlabel('X [m]', fontsize=12)
         axes[2].set_ylabel('Y [m]', fontsize=12)
         axes[2].set_aspect('equal')
         axes[2].grid(True, alpha=0.3)
-        # Colorbar with percentage label, fixed range 0-5%
+        # Colorbar with percentage label, fixed range 0-10%
         cbar3 = plt.colorbar(im3, ax=axes[2], label='Error [%]', fraction=0.046, pad=0.04)
         cbar3.ax.tick_params(labelsize=10)
-        cbar3.set_ticks(np.linspace(0, 5, 6))  # Show ticks at 0, 1, 2, 3, 4, 5%
+        cbar3.set_ticks(np.linspace(0, 10, 11))  # Show ticks at 0, 1, 2, ..., 10%
         
         plt.tight_layout()
         output_path = output_dir / f'{field_name}_comparison.png'
