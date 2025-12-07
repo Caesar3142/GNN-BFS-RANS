@@ -179,34 +179,58 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         # Create comparison figure
         fig, axes = plt.subplots(1, 3, figsize=(18, 6))
         
-        # Use triangulation-based contouring for unstructured mesh (removes artifacts)
+        # Use griddata with Delaunay domain masking (from sample project)
         x = cell_centers[:, 0]
         y = cell_centers[:, 1]
         
-        from matplotlib.tri import Triangulation
+        # Create regular grid
+        nx, ny = 200, 200
+        xi = np.linspace(x.min(), x.max(), nx)
+        yi = np.linspace(y.min(), y.max(), ny)
+        Xi, Yi = np.meshgrid(xi, yi)
         
-        # Create triangulation from cell centers
-        tri = Triangulation(x, y)
+        from scipy.interpolate import griddata
+        from scipy.spatial import Delaunay
         
-        # Predicted field - use tricontourf for smooth unstructured mesh visualization
-        im1 = axes[0].tricontourf(tri, pred_mag, levels=20, cmap=config['cmap'], extend='both')
+        # Interpolate to grid
+        Zi_pred = griddata((x, y), pred_mag, (Xi, Yi), method='linear', fill_value=np.nan)
+        Zi_ref = griddata((x, y), ref_mag, (Xi, Yi), method='linear', fill_value=np.nan)
+        error = np.abs(pred_mag - ref_mag)
+        Zi_err = griddata((x, y), error, (Xi, Yi), method='linear', fill_value=np.nan)
+        
+        # Domain masking with Delaunay triangulation (key fix from sample project)
+        try:
+            points_2d = np.column_stack([x, y])
+            tri = Delaunay(points_2d)
+            grid_points = np.column_stack([Xi.ravel(), Yi.ravel()])
+            mask = tri.find_simplex(grid_points) >= 0
+            mask = mask.reshape(Xi.shape)
+            
+            # Mask points outside domain
+            Zi_pred[~mask] = np.nan
+            Zi_ref[~mask] = np.nan
+            Zi_err[~mask] = np.nan
+        except:
+            pass  # If Delaunay fails, continue without masking
+        
+        # Predicted field
+        im1 = axes[0].contourf(Xi, Yi, Zi_pred, levels=20, cmap=config['cmap'], extend='both')
         axes[0].set_title(f'Predicted {config["name"]}', fontsize=12, fontweight='bold')
         axes[0].set_xlabel('X [m]')
         axes[0].set_ylabel('Y [m]')
         axes[0].set_aspect('equal')
         plt.colorbar(im1, ax=axes[0], label=config['unit'])
         
-        # Reference - use tricontourf for smooth unstructured mesh visualization
-        im2 = axes[1].tricontourf(tri, ref_mag, levels=20, cmap=config['cmap'], extend='both')
+        # Reference
+        im2 = axes[1].contourf(Xi, Yi, Zi_ref, levels=20, cmap=config['cmap'], extend='both')
         axes[1].set_title(f'Reference {config["name"]}', fontsize=12, fontweight='bold')
         axes[1].set_xlabel('X [m]')
         axes[1].set_ylabel('Y [m]')
         axes[1].set_aspect('equal')
         plt.colorbar(im2, ax=axes[1], label=config['unit'])
         
-        # Error - use tricontourf for smooth unstructured mesh visualization
-        error = np.abs(pred_mag - ref_mag)
-        im3 = axes[2].tricontourf(tri, error, levels=20, cmap='hot', extend='both')
+        # Error
+        im3 = axes[2].contourf(Xi, Yi, Zi_err, levels=20, cmap='hot', extend='both')
         axes[2].set_title(f'Absolute Error', fontsize=12, fontweight='bold')
         axes[2].set_xlabel('X [m]')
         axes[2].set_ylabel('Y [m]')
@@ -257,7 +281,33 @@ def visualize_predictions(checkpoint_path, case_path, reference_time, output_dir
     }
     
     # Get cell centers for internal cells
-    cell_centers = mesh_data['cell_centers'][:n_internal]
+    cell_centers_all = mesh_data['cell_centers'][:n_internal]
+    
+    # Filter to z >= 0 (positive z side, corresponding to z = 0.0005 in polyMesh points)
+    # Since cell centers are averaged from points at z = -0.0005 and z = 0.0005,
+    # cells with z >= 0 are closer to the z = 0.0005 plane
+    z_mask = cell_centers_all[:, 2] >= 0
+    n_filtered = np.sum(z_mask)
+    
+    print(f"Filtering to z >= 0 (positive z side, corresponding to z = 0.0005 in points): {n_filtered} cells (from {n_internal} total)")
+    
+    if n_filtered == 0:
+        print("Warning: No cells found with z > 0, using all cells")
+        cell_centers = cell_centers_all
+    else:
+        # Filter cell centers and fields
+        cell_centers = cell_centers_all[z_mask]
+        for field_name in predicted_fields:
+            if len(predicted_fields[field_name].shape) > 1:
+                predicted_fields[field_name] = predicted_fields[field_name][z_mask]
+            else:
+                predicted_fields[field_name] = predicted_fields[field_name][z_mask]
+        
+        for field_name in ref_dict:
+            if len(ref_dict[field_name].shape) > 1:
+                ref_dict[field_name] = ref_dict[field_name][z_mask]
+            else:
+                ref_dict[field_name] = ref_dict[field_name][z_mask]
     
     print("Creating visualization plots...")
     compare_fields(predicted_fields, ref_dict, cell_centers, output_dir)
