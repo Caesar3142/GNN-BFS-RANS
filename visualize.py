@@ -198,8 +198,8 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         x = cell_centers[:, 0]
         y = cell_centers[:, 1]
         
-        # Create regular grid
-        nx, ny = 200, 200
+        # Create regular grid - higher resolution
+        nx, ny = 500, 500
         xi = np.linspace(x.min(), x.max(), nx)
         yi = np.linspace(y.min(), y.max(), ny)
         Xi, Yi = np.meshgrid(xi, yi)
@@ -210,8 +210,19 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         # Interpolate to grid
         Zi_pred = griddata((x, y), pred_mag, (Xi, Yi), method='linear', fill_value=np.nan)
         Zi_ref = griddata((x, y), ref_mag, (Xi, Yi), method='linear', fill_value=np.nan)
-        error = np.abs(pred_mag - ref_mag)
-        Zi_err = griddata((x, y), error, (Xi, Yi), method='linear', fill_value=np.nan)
+        
+        # Calculate percentage error: (|pred - ref| / |ref|) * 100
+        # Avoid division by zero
+        ref_magnitude = np.abs(ref_mag)
+        threshold = np.max(ref_magnitude) * 1e-6  # Small threshold to avoid division by zero
+        error_percent = np.where(
+            ref_magnitude > threshold,
+            (np.abs(pred_mag - ref_mag) / ref_magnitude) * 100,
+            np.zeros_like(ref_mag)
+        )
+        # Clip error to maximum 5% for better visualization
+        error_percent = np.clip(error_percent, 0, 5.0)
+        Zi_err = griddata((x, y), error_percent, (Xi, Yi), method='linear', fill_value=np.nan)
         
         # Domain masking with Delaunay triangulation (key fix from sample project)
         try:
@@ -231,7 +242,7 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         # Common scale for predicted and reference
         vmin = min(np.nanmin(Zi_pred), np.nanmin(Zi_ref))
         vmax = max(np.nanmax(Zi_pred), np.nanmax(Zi_ref))
-        levels = np.linspace(vmin, vmax, 20)
+        levels = np.linspace(vmin, vmax, 50)  # More contour levels for smoother appearance
         
         # Predicted field - top
         im1 = axes[0].contourf(Xi, Yi, Zi_pred, levels=levels, vmin=vmin, vmax=vmax, 
@@ -257,20 +268,24 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         cbar2 = plt.colorbar(im2, ax=axes[1], label=config['unit'], fraction=0.046, pad=0.04)
         cbar2.ax.tick_params(labelsize=10)
         
-        # Error - bottom
-        im3 = axes[2].contourf(Xi, Yi, Zi_err, levels=20, cmap='hot', extend='neither')
-        axes[2].set_title(f'Absolute Error', fontsize=14, fontweight='bold')
+        # Error - bottom (percentage error, capped at 5%)
+        error_levels = np.linspace(0, 5.0, 50)  # Fixed range 0-5%
+        im3 = axes[2].contourf(Xi, Yi, Zi_err, levels=error_levels, vmin=0, vmax=5.0, 
+                               cmap='hot', extend='max')  # Show arrow for values > 5%
+        axes[2].set_title(f'Percentage Error: |Predicted - Reference| / |Reference| × 100% (capped at 5%)', 
+                         fontsize=14, fontweight='bold')
         axes[2].set_xlabel('X [m]', fontsize=12)
         axes[2].set_ylabel('Y [m]', fontsize=12)
         axes[2].set_aspect('equal')
         axes[2].grid(True, alpha=0.3)
-        # Colorbar without extend arrows
-        cbar3 = plt.colorbar(im3, ax=axes[2], label=config['unit'], fraction=0.046, pad=0.04)
+        # Colorbar with percentage label, fixed range 0-5%
+        cbar3 = plt.colorbar(im3, ax=axes[2], label='Error [%]', fraction=0.046, pad=0.04)
         cbar3.ax.tick_params(labelsize=10)
+        cbar3.set_ticks(np.linspace(0, 5, 6))  # Show ticks at 0, 1, 2, 3, 4, 5%
         
         plt.tight_layout()
         output_path = output_dir / f'{field_name}_comparison.png'
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        plt.savefig(output_path, dpi=400, bbox_inches='tight')
         print(f"Saved comparison plot: {output_path}")
         plt.close()
 
