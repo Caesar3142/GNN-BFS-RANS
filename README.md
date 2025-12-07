@@ -10,7 +10,7 @@ The framework consists of:
 - **GNN Model**: Graph Neural Network for flow field prediction
 - **Training Script**: End-to-end training pipeline with history tracking
 - **Inference Script**: Prediction and evaluation tools
-- **Visualization Tools**: Field comparison plots and training curve visualization
+- **Visualization Tools**: Field comparison plots, line plots, and training curve visualization
 
 ## Features
 
@@ -20,8 +20,9 @@ The framework consists of:
 - Robust graph construction with automatic validation and error handling
 - Automatic handling of isolated nodes and edge connectivity issues
 - **Improved normalization**: Per-component velocity normalization for better accuracy
-- **Field-wise loss**: Balanced training across all flow fields
+- **Field-wise loss**: Balanced training across all flow fields with optimized pressure weight (3.0)
 - **Training visualization**: Plot training curves and monitor progress
+- **Line plots**: Extract and visualize velocity/pressure along specific lines (horizontal/vertical)
 - Can save predictions in both NumPy and OpenFOAM formats
 - Includes evaluation metrics for field-wise error analysis
 - Triangulation-based visualization for accurate mesh representation
@@ -225,8 +226,33 @@ python train.py \
 - `--num_layers`: Number of GNN layers (default: 4)
 - `--layer_type`: GNN layer type - GCN, GAT, GIN, or Transformer (default: GCN)
 - `--epochs`: Number of training epochs (default: 100)
-- `--lr`: Learning rate (default: 0.001)
+- `--lr`: Learning rate (default: 3e-4, optimized for CFD-GNNs)
 - `--batch_size`: Batch size (default: 1, typically for single mesh)
+- `--pressure_ref_weight`: Weight for pressure reference constraint to prevent drift (default: 0.1)
+- `--curriculum_epochs`: Number of epochs for curriculum training (0 = disabled). Phase 1: train U+turbulence, Phase 2: train all (default: 0)
+
+**Recommended Training Configuration:**
+```bash
+python train.py \
+    --case_path OpenFOAM-data \
+    --time_dirs 0 100 200 282 \
+    --output_dir checkpoints \
+    --hidden_dim 256 \
+    --num_layers 6 \
+    --layer_type GCN \
+    --epochs 200 \
+    --lr 3e-4 \
+    --pressure_ref_weight 0.1 \
+    --curriculum_epochs 25
+```
+
+**Training Strategy:**
+- **Pressure weight = 3.0**: Higher weight prevents pressure under-training and drift
+- **Lower learning rate (3e-4)**: More stable for CFD-GNNs, reduces early oscillations
+- **Pressure reference constraint**: Anchors absolute pressure level to prevent global drift
+- **Curriculum training**: Optional two-phase training (freeze pressure in Phase 1, then unfreeze in Phase 2)
+
+**For detailed information on training fixes and troubleshooting, see `TRAINING_FIXES.md`**
 
 **Training Output:**
 - Model checkpoints saved in `output_dir/`:
@@ -323,12 +349,19 @@ The graph is constructed from OpenFOAM mesh connectivity:
 - **Loss Function**: Weighted MSE with field-wise computation for balanced training across all fields
   - Computes loss separately for each field (U, p, k, epsilon, nut)
   - Applies field-specific weights, then combines
+  - **Default weights**: U=1.0, **p=3.0** (critical for pressure stability), k=0.5, epsilon=0.5, nut=0.5
   - Ensures balanced training regardless of normalized field scales
+  - **Pressure reference constraint**: `L_pref = (mean(p_pred) - mean(p_ref))²` prevents global drift
 - **Normalization**: Per-component normalization for velocity (Ux, Uy, Uz normalized separately)
   - Each velocity component gets its own mean and std
   - Scalar fields normalized independently
   - Improves training stability and prediction accuracy
+- **Learning Rate**: Default 3e-4 (optimized for CFD-GNNs, reduces early instability)
 - **Optimizer**: Adam with learning rate scheduling (ReduceLROnPlateau)
+- **Curriculum Training**: Optional two-phase training strategy
+  - Phase 1: Train U + turbulence fields, freeze pressure output
+  - Phase 2: Unfreeze pressure, reduce learning rate by 50%
+  - Prevents early pressure oscillations and improves stability
 - **Regularization**: Gradient clipping, dropout, batch normalization
 - **Evaluation**: Per-field error metrics (MAE, RMSE, relative error) computed every 10 epochs
 - **Training History**: Automatically saved to `training_history.json` for plotting and analysis
@@ -352,6 +385,10 @@ The graph is constructed from OpenFOAM mesh connectivity:
 - **Field comparison plots**: Contour plots comparing predicted vs reference fields
   - Saved as PNG images: `U_comparison.png`, `p_comparison.png`, etc.
   - Each plot shows predicted, reference, and normalized error
+- **Line plots**: Velocity and pressure along specific lines
+  - `line_Y_0.005.png`: Horizontal line at Y = 0.005
+  - `line_X_0.15.png`: Vertical line at X = 0.15
+  - Each plot shows predicted vs reference for velocity and pressure
 - **Training curves**: Training and validation loss plots
   - `training_curves.png`: Main training progress plot
   - `field_errors_detailed.png`: Detailed per-field error plots (optional)
@@ -365,11 +402,18 @@ The graph is constructed from OpenFOAM mesh connectivity:
    ```
 3. **Train Model**:
    ```bash
-   python train.py --case_path OpenFOAM-data --time_dirs 0 100 200 282 --epochs 100
+   python train.py \
+       --case_path OpenFOAM-data \
+       --time_dirs 0 100 200 282 \
+       --epochs 200 \
+       --lr 3e-4 \
+       --pressure_ref_weight 0.1 \
+       --curriculum_epochs 25
    ```
    This will:
-   - Load and normalize the data
-   - Train the GNN model
+   - Load and normalize the data (per-component velocity normalization)
+   - Train the GNN model with optimized settings
+   - Use curriculum training (freeze pressure in Phase 1, then unfreeze)
    - Save checkpoints and training history
 4. **Plot Training Curves**:
    ```bash
@@ -394,7 +438,14 @@ The graph is constructed from OpenFOAM mesh connectivity:
    - Turbulent kinetic energy (k)
    - Dissipation rate (epsilon)
    - Turbulent viscosity (nut)
-7. **Use Predictions**: Load predictions from `predictions/` directory for further analysis
+7. **Plot Line Comparisons** (optional):
+   ```bash
+   python plot_lines.py --checkpoint checkpoints/best_model.pt --x_line 0.15 --y_line 0.005
+   ```
+   This creates line plots showing velocity and pressure along:
+   - Horizontal line at Y = 0.005
+   - Vertical line at X = 0.15
+8. **Use Predictions**: Load predictions from `predictions/` directory for further analysis
 
 ## Notes
 
@@ -407,6 +458,8 @@ The graph is constructed from OpenFOAM mesh connectivity:
 - **Normalization**: Velocity components are normalized separately; each field is normalized independently
 - **Training**: The loss function uses field-wise computation to ensure balanced learning across all fields
 - **Visualization**: Plots use triangulation-based rendering for accurate representation of unstructured meshes
+- **Training fixes**: Pressure weight (3.0), lower LR (3e-4), pressure reference constraint, and optional curriculum training improve stability
+- **Line plots**: Use `plot_lines.py` to extract and visualize field values along specific lines for detailed analysis
 
 ## Troubleshooting
 
@@ -433,6 +486,10 @@ If you encounter errors related to graph connectivity or message passing:
 ### Normalization & Training
 - ✅ **Per-component velocity normalization**: Ux, Uy, Uz normalized separately for better accuracy
 - ✅ **Field-wise loss computation**: Improved loss function that computes loss per field, ensuring balanced training
+- ✅ **Pressure weight = 3.0**: Critical fix to prevent pressure under-training and drift
+- ✅ **Reduced learning rate (3e-4)**: Optimized for CFD-GNNs, reduces early instability
+- ✅ **Pressure reference constraint**: Anchors absolute pressure level to prevent global drift
+- ✅ **Curriculum training**: Optional two-phase training (freeze pressure in Phase 1)
 - ✅ **Training history tracking**: Automatic saving of training metrics for analysis
 - ✅ **Training curve plotting**: New script to visualize training progress and loss curves
 
@@ -441,6 +498,7 @@ If you encounter errors related to graph connectivity or message passing:
 - ✅ **2D collapse function**: Automatic averaging of 3D data to 2D for cleaner plots
 - ✅ **Improved error metrics**: Normalized error calculation using field range instead of individual values
 - ✅ **Diagnostic output**: Detailed error statistics printed during visualization
+- ✅ **Line plots**: New script to plot velocity and pressure along specific lines (horizontal/vertical)
 
 ## Future Enhancements
 
