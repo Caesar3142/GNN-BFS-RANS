@@ -179,38 +179,34 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
         # Create comparison figure
         fig, axes = plt.subplots(1, 3, figsize=(18, 6))
         
-        # Predicted
+        # Use triangulation-based contouring for unstructured mesh (removes artifacts)
         x = cell_centers[:, 0]
         y = cell_centers[:, 1]
-        nx, ny = 200, 200
-        xi = np.linspace(x.min(), x.max(), nx)
-        yi = np.linspace(y.min(), y.max(), ny)
-        Xi, Yi = np.meshgrid(xi, yi)
         
-        from scipy.interpolate import griddata
+        from matplotlib.tri import Triangulation
         
-        # Predicted field
-        Zi_pred = griddata((x, y), pred_mag, (Xi, Yi), method='linear', fill_value=np.nan)
-        im1 = axes[0].contourf(Xi, Yi, Zi_pred, levels=20, cmap=config['cmap'])
+        # Create triangulation from cell centers
+        tri = Triangulation(x, y)
+        
+        # Predicted field - use tricontourf for smooth unstructured mesh visualization
+        im1 = axes[0].tricontourf(tri, pred_mag, levels=20, cmap=config['cmap'], extend='both')
         axes[0].set_title(f'Predicted {config["name"]}', fontsize=12, fontweight='bold')
         axes[0].set_xlabel('X [m]')
         axes[0].set_ylabel('Y [m]')
         axes[0].set_aspect('equal')
         plt.colorbar(im1, ax=axes[0], label=config['unit'])
         
-        # Reference
-        Zi_ref = griddata((x, y), ref_mag, (Xi, Yi), method='linear', fill_value=np.nan)
-        im2 = axes[1].contourf(Xi, Yi, Zi_ref, levels=20, cmap=config['cmap'])
+        # Reference - use tricontourf for smooth unstructured mesh visualization
+        im2 = axes[1].tricontourf(tri, ref_mag, levels=20, cmap=config['cmap'], extend='both')
         axes[1].set_title(f'Reference {config["name"]}', fontsize=12, fontweight='bold')
         axes[1].set_xlabel('X [m]')
         axes[1].set_ylabel('Y [m]')
         axes[1].set_aspect('equal')
         plt.colorbar(im2, ax=axes[1], label=config['unit'])
         
-        # Error
+        # Error - use tricontourf for smooth unstructured mesh visualization
         error = np.abs(pred_mag - ref_mag)
-        Zi_err = griddata((x, y), error, (Xi, Yi), method='linear', fill_value=np.nan)
-        im3 = axes[2].contourf(Xi, Yi, Zi_err, levels=20, cmap='hot')
+        im3 = axes[2].tricontourf(tri, error, levels=20, cmap='hot', extend='both')
         axes[2].set_title(f'Absolute Error', fontsize=12, fontweight='bold')
         axes[2].set_xlabel('X [m]')
         axes[2].set_ylabel('Y [m]')
