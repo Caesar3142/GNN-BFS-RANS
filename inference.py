@@ -13,11 +13,13 @@ import os
 from openfoam_loader import OpenFOAMLoader
 from graph_constructor import GraphConstructor
 from gnn_model import FlowGNN
+from normalization import FieldNormalizer
+import pickle
 
 
 def load_model(checkpoint_path: str, device: str = 'cpu'):
     """Load trained model from checkpoint."""
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
     # Get config
     if 'config' in checkpoint:
@@ -25,17 +27,17 @@ def load_model(checkpoint_path: str, device: str = 'cpu'):
     else:
         # Default config
         config = {
-            'hidden_dim': 128,
-            'num_layers': 4,
+            'hidden_dim': 256,
+            'num_layers': 6,
             'layer_type': 'GCN'
         }
     
     # Create model
     model = FlowGNN(
         input_dim=3,
-        hidden_dim=config.get('hidden_dim', 128),
+        hidden_dim=config.get('hidden_dim', 256),
         output_dim=7,  # U(3) + p(1) + k(1) + epsilon(1) + nut(1)
-        num_layers=config.get('num_layers', 4),
+        num_layers=config.get('num_layers', 6),
         layer_type=config.get('layer_type', 'GCN'),
         use_edge_attr=True,
         dropout=0.0,  # No dropout during inference
@@ -47,10 +49,17 @@ def load_model(checkpoint_path: str, device: str = 'cpu'):
     model.eval()
     model.to(device)
     
-    return model, config
+    # Load normalizer if available
+    normalizer = None
+    if 'normalizer' in checkpoint and checkpoint['normalizer'] is not None:
+        normalizer = FieldNormalizer()
+        normalizer.field_stats = checkpoint['normalizer']['field_stats']
+        normalizer.scalers = checkpoint['normalizer']['scalers']  # Already in correct format
+    
+    return model, config, normalizer
 
 
-def predict_fields(model, graph_data, device='cpu'):
+def predict_fields(model, graph_data, device='cpu', normalizer=None):
     """Predict flow fields from graph data."""
     model.eval()
     
@@ -66,11 +75,16 @@ def predict_fields(model, graph_data, device='cpu'):
         # Parse into fields
         fields = model.predict_fields(output)
         
-        # Move back to CPU
+        # Move back to CPU and convert to numpy
+        fields_numpy = {}
         for key in fields:
-            fields[key] = fields[key].cpu().numpy()
-    
-    return fields
+            fields_numpy[key] = fields[key].cpu().numpy()
+        
+        # Denormalize if normalizer available
+        if normalizer is not None:
+            fields_numpy = normalizer.inverse_transform(fields_numpy)
+        
+        return fields_numpy
 
 
 def save_fields_openfoam_format(fields: dict, output_dir: str, time_dir: str = 'predicted'):
@@ -227,8 +241,10 @@ def main():
     
     # Load model
     print(f"Loading model from {args.checkpoint}...")
-    model, config = load_model(args.checkpoint, args.device)
+    model, config, normalizer = load_model(args.checkpoint, args.device)
     print("Model loaded successfully!")
+    if normalizer is not None:
+        print("Normalizer found - will denormalize predictions")
     
     # Load mesh and construct graph
     print("Loading mesh and constructing graph...")
@@ -242,7 +258,7 @@ def main():
     
     # Predict
     print("Running inference...")
-    predicted_fields = predict_fields(model, graph, args.device)
+    predicted_fields = predict_fields(model, graph, args.device, normalizer)
     print("Prediction completed!")
     
     # Save predictions

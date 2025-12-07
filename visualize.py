@@ -14,26 +14,28 @@ import json
 from openfoam_loader import OpenFOAMLoader
 from graph_constructor import GraphConstructor
 from gnn_model import FlowGNN
+from normalization import FieldNormalizer
+import pickle
 
 
 def load_model(checkpoint_path: str, device: str = 'cpu'):
     """Load trained model from checkpoint."""
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
     if 'config' in checkpoint:
         config = checkpoint['config']
     else:
         config = {
-            'hidden_dim': 128,
-            'num_layers': 4,
+            'hidden_dim': 256,
+            'num_layers': 6,
             'layer_type': 'GCN'
         }
     
     model = FlowGNN(
         input_dim=3,
-        hidden_dim=config.get('hidden_dim', 128),
+        hidden_dim=config.get('hidden_dim', 256),
         output_dim=7,
-        num_layers=config.get('num_layers', 4),
+        num_layers=config.get('num_layers', 6),
         layer_type=config.get('layer_type', 'GCN'),
         use_edge_attr=True,
         dropout=0.0,
@@ -44,10 +46,17 @@ def load_model(checkpoint_path: str, device: str = 'cpu'):
     model.eval()
     model.to(device)
     
-    return model, config
+    # Load normalizer if available
+    normalizer = None
+    if 'normalizer' in checkpoint and checkpoint['normalizer'] is not None:
+        normalizer = FieldNormalizer()
+        normalizer.field_stats = checkpoint['normalizer']['field_stats']
+        normalizer.scalers = checkpoint['normalizer']['scalers']  # Already in correct format
+    
+    return model, config, normalizer
 
 
-def predict_fields(model, graph_data, device='cpu'):
+def predict_fields(model, graph_data, device='cpu', normalizer=None):
     """Predict flow fields from graph data."""
     model.eval()
     
@@ -59,10 +68,16 @@ def predict_fields(model, graph_data, device='cpu'):
         output = model(x, edge_index, edge_attr)
         fields = model.predict_fields(output)
         
+        # Convert to numpy
+        fields_numpy = {}
         for key in fields:
-            fields[key] = fields[key].cpu().numpy()
-    
-    return fields
+            fields_numpy[key] = fields[key].cpu().numpy()
+        
+        # Denormalize if normalizer available
+        if normalizer is not None:
+            fields_numpy = normalizer.inverse_transform(fields_numpy)
+        
+        return fields_numpy
 
 
 def create_2d_contour_plot(cell_centers, field_values, field_name, title, 
@@ -247,7 +262,9 @@ def compare_fields(predicted_fields, reference_fields, cell_centers, output_dir)
 def visualize_predictions(checkpoint_path, case_path, reference_time, output_dir, device='cpu'):
     """Main visualization function."""
     print("Loading model...")
-    model, config = load_model(checkpoint_path, device)
+    model, config, normalizer = load_model(checkpoint_path, device)
+    if normalizer is not None:
+        print("Normalizer found - will denormalize predictions")
     
     print("Loading mesh and constructing graph...")
     loader = OpenFOAMLoader(case_path)
@@ -266,7 +283,7 @@ def visualize_predictions(checkpoint_path, case_path, reference_time, output_dir
     )
     
     print("Running prediction...")
-    predicted_fields = predict_fields(model, graph, device)
+    predicted_fields = predict_fields(model, graph, device, normalizer)
     
     print("Loading reference fields...")
     reference_fields = loader.load_fields(reference_time)

@@ -86,8 +86,11 @@ class FlowGNN(nn.Module):
             if use_batch_norm:
                 self.batch_norms.append(BatchNorm(hidden_dim))
         
-        # Output projection
+        # Output projection - deeper for better capacity
         self.output_proj = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),

@@ -17,12 +17,14 @@ import os
 from openfoam_loader import OpenFOAMLoader
 from graph_constructor import GraphConstructor
 from gnn_model import FlowGNN
+from normalization import FieldNormalizer, WeightedMSELoss
 
 
 class OpenFOAMDataset(Dataset):
     """Dataset for OpenFOAM flow field data."""
     
-    def __init__(self, case_path: str, time_dirs: list, use_fields_as_input: bool = False):
+    def __init__(self, case_path: str, time_dirs: list, use_fields_as_input: bool = False, 
+                 normalizer: FieldNormalizer = None, normalize: bool = True):
         """
         Initialize dataset.
         
@@ -30,24 +32,61 @@ class OpenFOAMDataset(Dataset):
             case_path: Path to OpenFOAM case directory
             time_dirs: List of time directories to load (e.g., ['0', '100', '200', '282'])
             use_fields_as_input: If True, use field data as input features
+            normalizer: FieldNormalizer instance (if None, will be created)
+            normalize: Whether to normalize fields
         """
         self.case_path = case_path
         self.time_dirs = time_dirs
         self.use_fields_as_input = use_fields_as_input
+        self.normalize = normalize
+        self.normalizer = normalizer
         
         # Load mesh once
         loader = OpenFOAMLoader(case_path)
         self.mesh_data = loader.load_mesh()
         self.graph_constructor = GraphConstructor(self.mesh_data)
         
-        # Load all field data
-        self.data_samples = []
+        # First pass: collect all fields to fit normalizer
+        all_fields = {}
+        field_data_list = []
+        
         for time_dir in time_dirs:
             try:
                 fields = loader.load_fields(time_dir)
+                field_data_list.append(fields)
+                
+                # Collect for normalizer fitting
+                for field_name, field_data in fields.items():
+                    if field_name not in all_fields:
+                        all_fields[field_name] = []
+                    all_fields[field_name].append(field_data)
+            except Exception as e:
+                print(f"Warning: Could not load time directory {time_dir}: {e}")
+                continue
+        
+        # Fit normalizer if needed
+        if self.normalize and self.normalizer is None:
+            print("Fitting field normalizer...")
+            # Concatenate all fields for fitting
+            fit_fields = {}
+            for field_name, field_list in all_fields.items():
+                fit_fields[field_name] = np.concatenate(field_list, axis=0)
+            
+            self.normalizer = FieldNormalizer()
+            self.normalizer.fit(fit_fields)
+            print("Normalizer fitted")
+        
+        # Second pass: load and normalize data
+        self.data_samples = []
+        for idx, time_dir in enumerate(time_dirs):
+            try:
+                fields = loader.load_fields(time_dir)
+                
+                # Normalize fields if needed
+                if self.normalize and self.normalizer is not None:
+                    fields = self.normalizer.transform(fields)
                 
                 # Determine number of internal cells from field data
-                # In OpenFOAM, internalField contains values for cells 0 to nInternalCells-1
                 n_internal = None
                 for field_name in ['U', 'p', 'k', 'epsilon', 'nut']:
                     if field_name in fields:
@@ -62,7 +101,6 @@ class OpenFOAMDataset(Dataset):
                     continue
                 
                 # Build graph filtered to exactly n_internal cells (matching field data)
-                # OpenFOAM stores internalField for cells 0 to n_internal-1
                 graph = self.graph_constructor.build_graph(
                     node_features=self.mesh_data['cell_centers'],
                     filter_internal=True,
@@ -72,9 +110,7 @@ class OpenFOAMDataset(Dataset):
                 # Verify sizes match
                 if graph.num_nodes != n_internal:
                     print(f"Warning: Graph has {graph.num_nodes} nodes but fields have {n_internal} values, adjusting...")
-                    # Filter graph to match field size exactly
                     graph.x = graph.x[:n_internal]
-                    # Filter edges to only include nodes 0 to n_internal-1
                     valid_edges = (graph.edge_index[0] < n_internal) & (graph.edge_index[1] < n_internal)
                     graph.edge_index = graph.edge_index[:, valid_edges]
                     graph.edge_attr = graph.edge_attr[valid_edges]
@@ -226,9 +262,9 @@ def main():
                        help='Time directories to use for training')
     parser.add_argument('--output_dir', type=str, default='checkpoints',
                        help='Directory to save checkpoints')
-    parser.add_argument('--hidden_dim', type=int, default=128,
+    parser.add_argument('--hidden_dim', type=int, default=256,
                        help='Hidden dimension for GNN')
-    parser.add_argument('--num_layers', type=int, default=4,
+    parser.add_argument('--num_layers', type=int, default=6,
                        help='Number of GNN layers')
     parser.add_argument('--layer_type', type=str, default='GCN',
                        choices=['GCN', 'GAT', 'GIN', 'Transformer'],
@@ -237,7 +273,7 @@ def main():
                        help='Batch size (usually 1 for single mesh)')
     parser.add_argument('--epochs', type=int, default=100,
                        help='Number of training epochs')
-    parser.add_argument('--lr', type=float, default=0.001,
+    parser.add_argument('--lr', type=float, default=0.0005,
                        help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-5,
                        help='Weight decay')
@@ -255,13 +291,22 @@ def main():
     with open(os.path.join(args.output_dir, 'config.json'), 'w') as f:
         json.dump(vars(args), f, indent=2)
     
-    # Load dataset
+    # Load dataset with normalization
     print("Loading dataset...")
     dataset = OpenFOAMDataset(
         args.case_path,
         args.time_dirs,
-        use_fields_as_input=False
+        use_fields_as_input=False,
+        normalize=True
     )
+    
+    # Save normalizer for inference
+    if dataset.normalizer is not None:
+        import pickle
+        normalizer_path = os.path.join(args.output_dir, 'normalizer.pkl')
+        with open(normalizer_path, 'wb') as f:
+            pickle.dump(dataset.normalizer, f)
+        print(f"Saved normalizer to {normalizer_path}")
     
     # Create dataloader
     dataloader = DataLoader(
@@ -287,7 +332,15 @@ def main():
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Loss and optimizer
-    criterion = nn.MSELoss()
+    # Use weighted loss to account for different field magnitudes
+    criterion = WeightedMSELoss(field_weights={
+        'U': 1.0,      # Velocity - most important
+        'p': 1.0,      # Pressure - important
+        'k': 0.5,      # Turbulence fields - less critical
+        'epsilon': 0.5,
+        'nut': 0.5
+    })
+    
     optimizer = optim.Adam(
         model.parameters(),
         lr=args.lr,
@@ -323,12 +376,21 @@ def main():
         # Save checkpoint
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            # Save normalizer with checkpoint
+            normalizer_data = None
+            if dataset.normalizer is not None:
+                normalizer_data = {
+                    'field_stats': dataset.normalizer.field_stats,
+                    'scalers': dataset.normalizer.scalers  # Already in correct format
+                }
+            
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_loss': val_loss,
-                'config': vars(args)
+                'config': vars(args),
+                'normalizer': normalizer_data
             }, os.path.join(args.output_dir, 'best_model.pt'))
             print(f"Saved best model (val_loss={val_loss:.6f})")
         
