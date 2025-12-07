@@ -173,6 +173,33 @@ Visualization complete! Plots saved to visualizations
 - The visualization automatically filters to 2D (z >= 0) for 2D plots
 - Error statistics are printed to console for each field
 
+### Line Plots
+
+Plot velocity and pressure along specific lines (horizontal or vertical):
+
+```bash
+# Plot along Y = 0.005 (horizontal) and X = 0.15 (vertical)
+python plot_lines.py \
+    --checkpoint checkpoints/best_model.pt \
+    --x_line 0.15 \
+    --y_line 0.005
+```
+
+**Arguments:**
+- `--checkpoint` (required): Path to trained model checkpoint
+- `--case_path` (optional): Path to OpenFOAM case directory (default: `OpenFOAM-data`)
+- `--reference_time` (optional): Time directory for reference (default: `282`)
+- `--x_line` (optional): X coordinate for vertical line (default: `0.15`)
+- `--y_line` (optional): Y coordinate for horizontal line (default: `0.005`)
+- `--output_dir` (optional): Directory to save plots (default: `visualizations`)
+- `--tol` (optional): Tolerance for line extraction (default: `1e-4`)
+
+**Output:**
+- `line_Y_0.005.png`: Velocity and pressure along horizontal line Y = 0.005
+- `line_X_0.15.png`: Velocity and pressure along vertical line X = 0.15
+- Each plot shows predicted vs reference for both velocity and pressure
+- Statistics printed to console (ranges and mean absolute errors)
+
 ### Training
 
 Train a GNN model on your OpenFOAM data:

@@ -155,7 +155,8 @@ def collate_fn(batch):
     return Batch.from_data_list(batch)
 
 
-def train_epoch(model, dataloader, optimizer, criterion, device, epoch):
+def train_epoch(model, dataloader, optimizer, criterion, device, epoch, 
+                pressure_ref_weight=0.1, freeze_pressure=False):
     """Train for one epoch."""
     model.train()
     total_loss = 0.0
@@ -169,11 +170,21 @@ def train_epoch(model, dataloader, optimizer, criterion, device, epoch):
         optimizer.zero_grad()
         output = model(batch.x, batch.edge_index, batch.edge_attr, batch.batch)
         
-        # Compute loss
-        loss = criterion(output, batch.y)
+        # Compute loss (with pressure reference constraint)
+        loss = criterion(output, batch.y, pressure_ref_weight=pressure_ref_weight)
         
         # Backward pass
         loss.backward()
+        
+        # Curriculum training: zero pressure gradients in phase 1
+        if freeze_pressure:
+            # Zero gradients for pressure output (index 3 in output layer)
+            for name, param in model.named_parameters():
+                if 'output_proj' in name and len(param.shape) == 2:
+                    if param.shape[0] == 7:  # Output layer
+                        if param.grad is not None:
+                            param.grad[3, :] = 0  # Zero pressure output gradients
+        
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         
@@ -185,7 +196,7 @@ def train_epoch(model, dataloader, optimizer, criterion, device, epoch):
     return total_loss / num_batches
 
 
-def validate(model, dataloader, criterion, device):
+def validate(model, dataloader, criterion, device, pressure_ref_weight=0.1):
     """Validate model."""
     model.eval()
     total_loss = 0.0
@@ -195,7 +206,7 @@ def validate(model, dataloader, criterion, device):
         for batch in dataloader:
             batch = batch.to(device)
             output = model(batch.x, batch.edge_index, batch.edge_attr, batch.batch)
-            loss = criterion(output, batch.y)
+            loss = criterion(output, batch.y, pressure_ref_weight=pressure_ref_weight)
             total_loss += loss.item()
             num_batches += 1
     
@@ -273,14 +284,18 @@ def main():
                        help='Batch size (usually 1 for single mesh)')
     parser.add_argument('--epochs', type=int, default=100,
                        help='Number of training epochs')
-    parser.add_argument('--lr', type=float, default=0.0005,
-                       help='Learning rate')
+    parser.add_argument('--lr', type=float, default=3e-4,
+                       help='Learning rate (default: 3e-4, recommended for CFD-GNNs)')
     parser.add_argument('--weight_decay', type=float, default=1e-5,
                        help='Weight decay')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu',
                        help='Device to use')
     parser.add_argument('--save_every', type=int, default=10,
                        help='Save checkpoint every N epochs')
+    parser.add_argument('--pressure_ref_weight', type=float, default=0.1,
+                       help='Weight for pressure reference constraint (anchors absolute pressure level)')
+    parser.add_argument('--curriculum_epochs', type=int, default=0,
+                       help='Number of epochs for curriculum training (0 = disabled). Phase 1: train U+turbulence, Phase 2: train all')
     
     args = parser.parse_args()
     
@@ -332,17 +347,24 @@ def main():
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     # Loss and optimizer
-    # Use weighted loss with field-wise computation for better handling of normalized fields
+    # Use weighted loss with field-wise computation and pressure reference constraint
+    # CRITICAL: Pressure weight = 3.0 to prevent under-training and drift
     criterion = WeightedMSELoss(
         field_weights={
             'U': 1.0,      # Velocity - most important
-            'p': 1.0,      # Pressure - important
+            'p': 3.0,      # Pressure - CRITICAL: higher weight prevents drift
             'k': 0.5,      # Turbulence fields - less critical
             'epsilon': 0.5,
             'nut': 0.5
         },
-        use_fieldwise=True  # Use field-wise loss computation (better for normalized fields)
+        use_fieldwise=True,  # Use field-wise loss computation (better for normalized fields)
+        pressure_ref_weight=args.pressure_ref_weight  # Anchor absolute pressure level
     )
+    
+    # Curriculum training: freeze pressure head in phase 1
+    if args.curriculum_epochs > 0:
+        print(f"Curriculum training enabled: Phase 1 (epochs 1-{args.curriculum_epochs}) will train U+turbulence only")
+        print("  Pressure output will be frozen in Phase 1 (gradients will be masked)")
     
     optimizer = optim.Adam(
         model.parameters(),
@@ -367,11 +389,27 @@ def main():
     }
     
     for epoch in range(1, args.epochs + 1):
+        # Curriculum training: unfreeze pressure after phase 1
+        freeze_pressure = False
+        if args.curriculum_epochs > 0:
+            if epoch <= args.curriculum_epochs:
+                freeze_pressure = True
+            elif epoch == args.curriculum_epochs + 1:
+                print(f"\n=== Curriculum Training: Phase 2 (epochs {epoch}-{args.epochs}) ===")
+                print("Unfreezing pressure output and reducing learning rate...")
+                # Reduce learning rate for phase 2
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = param_group['lr'] * 0.5
+                    print(f"  Reduced learning rate to {param_group['lr']:.6e}")
+        
         # Train
-        train_loss = train_epoch(model, dataloader, optimizer, criterion, args.device, epoch)
+        train_loss = train_epoch(model, dataloader, optimizer, criterion, args.device, epoch, 
+                                pressure_ref_weight=args.pressure_ref_weight,
+                                freeze_pressure=freeze_pressure)
         
         # Validate (using same data for now, can split later)
-        val_loss = validate(model, dataloader, criterion, args.device)
+        val_loss = validate(model, dataloader, criterion, args.device, 
+                           pressure_ref_weight=args.pressure_ref_weight)
         
         # Learning rate scheduling
         scheduler.step(val_loss)

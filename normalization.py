@@ -136,22 +136,24 @@ class FieldNormalizer:
 class WeightedMSELoss(nn.Module):
     """Weighted MSE loss for different flow fields with field-wise computation."""
     
-    def __init__(self, field_weights: Dict[str, float] = None, use_fieldwise: bool = True):
+    def __init__(self, field_weights: Dict[str, float] = None, use_fieldwise: bool = True,
+                 pressure_ref_weight: float = 0.1):
         """
         Initialize weighted loss.
         
         Args:
             field_weights: Dictionary of weights for each field
-                          Default: U=1.0, p=1.0, k=0.5, epsilon=0.5, nut=0.5
+                          Default: U=1.0, p=3.0, k=0.5, epsilon=0.5, nut=0.5
             use_fieldwise: If True, compute loss per field and then combine (better for normalized fields)
+            pressure_ref_weight: Weight for pressure reference constraint (anchors absolute pressure level)
         """
         super(WeightedMSELoss, self).__init__()
         
         if field_weights is None:
-            # Default weights - turbulence fields get lower weight
+            # Default weights - pressure gets higher weight to prevent under-training
             field_weights = {
                 'U': 1.0,      # Velocity is most important
-                'p': 1.0,      # Pressure is important
+                'p': 3.0,      # Pressure - CRITICAL: higher weight to prevent drift
                 'k': 0.5,      # Turbulence fields less critical
                 'epsilon': 0.5,
                 'nut': 0.5
@@ -159,6 +161,7 @@ class WeightedMSELoss(nn.Module):
         
         self.field_weights = field_weights
         self.use_fieldwise = use_fieldwise
+        self.pressure_ref_weight = pressure_ref_weight
         
         # Create weight tensor: [U(3), p(1), k(1), epsilon(1), nut(1)]
         self.weights = torch.tensor([
@@ -171,13 +174,15 @@ class WeightedMSELoss(nn.Module):
             field_weights.get('nut', 0.5)
         ], dtype=torch.float32)
     
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, pred: torch.Tensor, target: torch.Tensor, 
+                pressure_ref_weight: float = 0.1) -> torch.Tensor:
         """
         Compute weighted MSE loss.
         
         Args:
             pred: Predicted fields [batch_size, 7] or [num_nodes, 7]
             target: Target fields [batch_size, 7] or [num_nodes, 7]
+            pressure_ref_weight: Weight for pressure reference constraint (anchors absolute pressure level)
         
         Returns:
             Weighted MSE loss
@@ -193,10 +198,19 @@ class WeightedMSELoss(nn.Module):
             u_loss = torch.mean((u_pred - u_target) ** 2)
             field_losses.append(self.field_weights.get('U', 1.0) * u_loss)
             
-            # p (1 component)
+            # p (1 component) - with reference constraint to prevent global drift
             p_pred = pred[:, 3:4]
             p_target = target[:, 3:4]
             p_loss = torch.mean((p_pred - p_target) ** 2)
+            
+            # Pressure reference constraint: anchor absolute pressure level
+            # Prevents global drift (pressure is defined up to a constant)
+            if pressure_ref_weight > 0:
+                p_mean_pred = torch.mean(p_pred)
+                p_mean_target = torch.mean(p_target)
+                p_ref_loss = (p_mean_pred - p_mean_target) ** 2
+                p_loss = p_loss + pressure_ref_weight * p_ref_loss
+            
             field_losses.append(self.field_weights.get('p', 1.0) * p_loss)
             
             # k (1 component)
