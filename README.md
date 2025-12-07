@@ -16,6 +16,8 @@ The framework consists of:
 - Supports multiple GNN architectures (GCN, GAT, GIN, Transformer)
 - Predicts velocity (U), pressure (p), and turbulence fields (k, epsilon, nut)
 - Handles unstructured meshes via cell-to-cell connectivity
+- Robust graph construction with automatic validation and error handling
+- Automatic handling of isolated nodes and edge connectivity issues
 - Can save predictions in both NumPy and OpenFOAM formats
 - Includes evaluation metrics for field-wise error analysis
 
@@ -71,6 +73,20 @@ OpenFOAM-data/
 ```bash
 source venv/bin/activate
 ```
+
+### Testing Data Loading
+
+Before training, verify that your OpenFOAM data can be loaded correctly:
+
+```bash
+python test_data_loading.py --case_path OpenFOAM-data
+```
+
+This script checks:
+- Mesh data loading (points, faces, owner, neighbour)
+- Field data loading (U, p, k, epsilon, nut)
+- Graph construction and connectivity
+- Node and edge feature computation
 
 ### Visualization
 
@@ -151,6 +167,12 @@ The GNN model (`FlowGNN`) consists of:
 2. **GNN Layers**: Stack of graph convolution layers with residual connections
 3. **Output Projection**: Maps hidden features to flow field predictions
 
+**Message Passing Robustness:**
+- Automatic validation of edge connectivity before message passing
+- Handles edge cases (empty graphs, invalid indices) gracefully
+- Informative error messages for debugging connectivity issues
+- Automatic self-loop addition for isolated nodes to ensure message propagation
+
 The model predicts:
 - Velocity vector U: [n_cells, 3]
 - Pressure p: [n_cells, 1]
@@ -162,9 +184,15 @@ The model predicts:
 
 The graph is constructed from OpenFOAM mesh connectivity:
 - **Nodes**: Mesh cells (represented by cell centers)
-- **Edges**: Cell-to-cell connections via shared faces
+- **Edges**: Cell-to-cell connections via shared faces (bidirectional)
 - **Node Features**: Cell center coordinates (x, y, z)
 - **Edge Features**: Direction vector and distance between cell centers
+
+**Robustness Features:**
+- Automatic validation of edge indices to ensure all connections are within valid node range
+- Automatic handling of isolated nodes by adding self-loops to ensure graph connectivity
+- Proper handling of internal cell filtering when working with boundary conditions
+- Edge attribute validation and error handling for message passing
 
 ## Training Details
 
@@ -221,6 +249,29 @@ The graph is constructed from OpenFOAM mesh connectivity:
 - Boundary conditions are not explicitly encoded (can be added as future enhancement)
 - The model learns steady-state flow fields from geometry
 - For best results, use converged solution data (e.g., final time step) for training
+- Graph connectivity is automatically validated and fixed during construction
+- Isolated nodes are handled automatically with self-loops to ensure message passing works correctly
+
+## Troubleshooting
+
+### Graph Connectivity Issues
+If you encounter errors related to graph connectivity or message passing:
+- The framework automatically validates and fixes edge indices
+- Isolated nodes are automatically handled with self-loops
+- Check that your mesh data is properly loaded (use `test_data_loading.py`)
+
+### Common Issues
+- **"edge_index must have shape [2, num_edges]"**: This is automatically validated and fixed
+- **Isolated nodes**: Automatically handled by adding self-loops
+- **Invalid edge indices**: Automatically filtered out during graph construction
+
+## Recent Improvements
+
+- ✅ Fixed graph connectivity issues with proper edge index remapping
+- ✅ Added automatic validation of edge indices and node connectivity
+- ✅ Implemented robust message passing with error handling
+- ✅ Automatic handling of isolated nodes with self-loops
+- ✅ Enhanced error messages for debugging connectivity issues
 
 ## Future Enhancements
 

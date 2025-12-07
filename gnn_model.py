@@ -120,20 +120,65 @@ class FlowGNN(nn.Module):
         Returns:
             Predicted flow fields [num_nodes, output_dim]
         """
+        num_nodes = x.shape[0]
+        
+        # Validate edge_index
+        if edge_index.shape[0] != 2:
+            raise ValueError(f"edge_index must have shape [2, num_edges], got {edge_index.shape}")
+        
+        # Ensure edge_index is valid (all indices within [0, num_nodes-1])
+        if edge_index.shape[1] > 0:
+            max_idx = edge_index.max().item()
+            min_idx = edge_index.min().item()
+            if min_idx < 0 or max_idx >= num_nodes:
+                # Filter invalid edges
+                valid_mask = (edge_index[0] >= 0) & (edge_index[0] < num_nodes) & \
+                            (edge_index[1] >= 0) & (edge_index[1] < num_nodes)
+                edge_index = edge_index[:, valid_mask]
+                
+                # Update edge_attr if provided
+                if edge_attr is not None and edge_attr.shape[0] > 0:
+                    edge_attr = edge_attr[valid_mask]
+            
+            # If no valid edges remain, add self-loops for all nodes
+            if edge_index.shape[1] == 0:
+                self_loops = torch.arange(num_nodes, dtype=torch.long, device=x.device).repeat(2, 1)
+                edge_index = self_loops
+                if edge_attr is not None:
+                    edge_attr = torch.zeros((num_nodes, edge_attr.shape[1]), 
+                                          dtype=edge_attr.dtype, device=edge_attr.device)
+        
+        # Validate edge_attr dimensions if provided
+        if edge_attr is not None and edge_index.shape[1] > 0:
+            if edge_attr.shape[0] != edge_index.shape[1]:
+                raise ValueError(
+                    f"edge_attr must have {edge_index.shape[1]} entries, got {edge_attr.shape[0]}"
+                )
+        
         # Input projection
         x = self.input_proj(x)
         
         # GNN layers
         for i, layer in enumerate(self.gnn_layers):
             # Apply GNN layer
-            if self.layer_type in ['GCN', 'GIN']:
-                x_new = layer(x, edge_index)
-            elif self.layer_type == 'GAT':
-                x_new = layer(x, edge_index)
-            elif self.layer_type == 'Transformer':
-                x_new = layer(x, edge_index, edge_attr=edge_attr)
-            else:
-                x_new = layer(x, edge_index)
+            try:
+                if self.layer_type in ['GCN', 'GIN']:
+                    x_new = layer(x, edge_index)
+                elif self.layer_type == 'GAT':
+                    x_new = layer(x, edge_index)
+                elif self.layer_type == 'Transformer':
+                    x_new = layer(x, edge_index, edge_attr=edge_attr)
+                else:
+                    x_new = layer(x, edge_index)
+            except RuntimeError as e:
+                # Provide more informative error message
+                raise RuntimeError(
+                    f"Message passing failed in layer {i} ({self.layer_type}): {str(e)}\n"
+                    f"  num_nodes: {num_nodes}, num_edges: {edge_index.shape[1] if edge_index.shape[1] > 0 else 0}\n"
+                    f"  edge_index range: [{edge_index.min().item() if edge_index.shape[1] > 0 else 'N/A'}, "
+                    f"{edge_index.max().item() if edge_index.shape[1] > 0 else 'N/A'}]\n"
+                    f"  x shape: {x.shape}, edge_attr shape: {edge_attr.shape if edge_attr is not None else 'None'}"
+                ) from e
             
             # Residual connection
             x = x + x_new

@@ -145,19 +145,46 @@ class GraphConstructor:
                     # Map to new indices
                     new_owner = old_to_new[owner_cell]
                     new_neighbour = old_to_new[neighbour_cell]
-                    # Bidirectional edges
-                    edges.append([new_owner, new_neighbour])
-                    edges.append([new_neighbour, new_owner])
+                    # Ensure valid indices
+                    if new_owner >= 0 and new_neighbour >= 0:
+                        # Bidirectional edges
+                        edges.append([new_owner, new_neighbour])
+                        edges.append([new_neighbour, new_owner])
             
             edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous() if edges else torch.empty((2, 0), dtype=torch.long)
         else:
             edge_index = self.build_edge_index()
             # Remap edge indices if filtering
             if filter_internal and internal_mask is not None:
-                edge_index = old_to_new[edge_index]
+                # Convert edge_index to numpy for indexing, then back to torch
+                edge_index_np = edge_index.cpu().numpy()
+                edge_index_remapped = old_to_new[edge_index_np]
+                edge_index = torch.from_numpy(edge_index_remapped).long()
                 # Remove edges that map to -1 (non-internal cells)
                 valid_edges = (edge_index[0] >= 0) & (edge_index[1] >= 0)
                 edge_index = edge_index[:, valid_edges]
+        
+        # Validate edge_index: ensure all indices are within valid range
+        if edge_index.shape[1] > 0:
+            max_idx = edge_index.max().item()
+            if max_idx >= n_nodes:
+                # Filter out invalid edges
+                valid_edges = (edge_index[0] < n_nodes) & (edge_index[1] < n_nodes)
+                edge_index = edge_index[:, valid_edges]
+        
+        # Add self-loops for isolated nodes to ensure connectivity
+        if edge_index.shape[1] > 0 and n_nodes > 0:
+            # Find nodes that have at least one edge
+            connected_nodes = torch.unique(edge_index.flatten()).cpu().numpy()
+            # Find isolated nodes (nodes with no edges)
+            all_nodes = np.arange(n_nodes)
+            isolated_mask = ~np.isin(all_nodes, connected_nodes)
+            isolated_nodes = all_nodes[isolated_mask]
+            
+            # Add self-loops for isolated nodes
+            if len(isolated_nodes) > 0:
+                self_loops = torch.tensor([isolated_nodes, isolated_nodes], dtype=torch.long)
+                edge_index = torch.cat([edge_index, self_loops], dim=1)
         
         # Compute edge attributes
         if edge_index.shape[1] > 0:
@@ -172,6 +199,12 @@ class GraphConstructor:
                 src = edge_index[0, i].item()
                 dst = edge_index[1, i].item()
                 
+                # Validate indices
+                if src < 0 or src >= len(cell_centers) or dst < 0 or dst >= len(cell_centers):
+                    # Invalid edge - use zero attributes
+                    edge_attr.append([0.0, 0.0, 0.0, 0.0])
+                    continue
+                
                 if src == dst:
                     edge_attr.append([0.0, 0.0, 0.0, 0.0])
                 else:
@@ -185,7 +218,13 @@ class GraphConstructor:
             
             edge_attr = torch.tensor(edge_attr, dtype=torch.float32)
         else:
-            edge_attr = torch.empty((0, 4), dtype=torch.float32)
+            # If no edges, add self-loops for all nodes to ensure connectivity
+            if n_nodes > 0:
+                self_loops = torch.arange(n_nodes, dtype=torch.long).repeat(2, 1)
+                edge_index = self_loops
+                edge_attr = torch.zeros((n_nodes, 4), dtype=torch.float32)
+            else:
+                edge_attr = torch.empty((0, 4), dtype=torch.float32)
         
         # Node features: cell center coordinates + optional field data
         if node_features is None:
