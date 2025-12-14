@@ -324,6 +324,18 @@ This document covers:
 - Normalization strategies
 - Surrogate modeling approach
 
+## Results Analysis
+
+For guidance on interpreting training curves and line plot results, see **[RESULTS_DESCRIPTION.md](RESULTS_DESCRIPTION.md)**.
+
+This document covers:
+- Training curves analysis and interpretation
+- Velocity results along horizontal and vertical lines
+- Pressure results along horizontal and vertical lines
+- Performance assessment metrics
+- Common issues and troubleshooting
+- Recommendations for improvement
+
 ## Model Architecture
 
 The GNN model (`FlowGNN`) consists of:
