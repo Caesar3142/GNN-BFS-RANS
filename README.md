@@ -1,3 +1,6 @@
+this is velocity variation version
+
+
 # GNN-Based RANS Flow Field Surrogate Simulator
 
 This repository contains a Graph Neural Network (GNN) framework for training a surrogate simulator based on OpenFOAM steady RANS simulation data. The framework learns to predict flow fields (velocity, pressure, and turbulence quantities) directly from mesh geometry.
